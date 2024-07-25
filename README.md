@@ -2,8 +2,6 @@
 Realtime object detect system
 
 Project Structure
-graphql
-Copy code
 MobileCameraApp/
 ├── trained_images/               # Directory for storing trained images
 ├── dataset/                      # Directory for storing dataset images
@@ -15,6 +13,7 @@ MobileCameraApp/
 ├── requirements.txt              # List of dependencies
 ├── README.md                     # Project README file
 └── LICENSE                       # License file (optional)
+
 requirements.txt
 List all your dependencies in the requirements.txt file. Example:
 
