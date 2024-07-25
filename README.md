@@ -48,7 +48,7 @@ This is a real-time object and face detection application using YOLOv5 and KNN c
 
 1. Clone the repository:
     ```sh
-    git clone https://github.com/yourusername/MobileCameraApp.git
+    git clone https://github.com/drods/MobileCameraApp.git
     cd MobileCameraApp
     ```
 
