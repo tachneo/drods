@@ -10,7 +10,8 @@ from torch.utils.data import DataLoader, Dataset, random_split
 from torch import nn, optim
 from PIL import Image, ImageTk
 import os
-import matplotlib.pyplot as plt
+import threading
+import cv2
 
 # Define a simple dataset class
 class CustomDataset(Dataset):
@@ -32,7 +33,7 @@ class ObjectDetectionGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Image Classification Training Tool")
-        self.root.geometry("1000x800")
+        self.root.geometry("1200x800")
         self.root.resizable(True, True)
         
         self.create_widgets()
@@ -47,6 +48,7 @@ class ObjectDetectionGUI:
 
         self.losses = []
         self.accuracies = []
+        self.running_detection = False
 
     def create_widgets(self):
         # Frame for image and plot display
@@ -75,6 +77,12 @@ class ObjectDetectionGUI:
         self.load_model_button = ttk.Button(self.buttons_frame, text="Load Model", command=self.load_model)
         self.load_model_button.pack(side=tk.LEFT, padx=5)
 
+        self.start_detection_button = ttk.Button(self.buttons_frame, text="Start Detection", command=self.start_detection)
+        self.start_detection_button.pack(side=tk.LEFT, padx=5)
+
+        self.stop_detection_button = ttk.Button(self.buttons_frame, text="Stop Detection", command=self.stop_detection)
+        self.stop_detection_button.pack(side=tk.LEFT, padx=5)
+
         # Advanced options frame
         self.advanced_frame = ttk.Frame(self.root, padding="10")
         self.advanced_frame.pack(fill=tk.X, side=tk.BOTTOM)
@@ -94,6 +102,11 @@ class ObjectDetectionGUI:
         self.batch_size_entry.insert(0, "4")
         self.batch_size_entry.pack(side=tk.LEFT, padx=5)
 
+        ttk.Label(self.advanced_frame, text="Fine-tune Layers:").pack(side=tk.LEFT, padx=5)
+        self.finetune_layers_entry = ttk.Entry(self.advanced_frame)
+        self.finetune_layers_entry.insert(0, "0")  # Number of layers to unfreeze for fine-tuning
+        self.finetune_layers_entry.pack(side=tk.LEFT, padx=5)
+
         # Status frame
         self.status_frame = ttk.Frame(self.root, padding="10")
         self.status_frame.pack(fill=tk.X, side=tk.BOTTOM)
@@ -108,6 +121,13 @@ class ObjectDetectionGUI:
         self.progress_label = tk.Label(self.status_frame, text="0/0 images processed")
         self.progress_label.pack()
 
+        # Sidebar for background process status
+        self.sidebar_frame = ttk.Frame(self.root, padding="10")
+        self.sidebar_frame.pack(fill=tk.Y, side=tk.RIGHT)
+        
+        self.sidebar_text = tk.Text(self.sidebar_frame, width=40, height=30)
+        self.sidebar_text.pack(fill=tk.Y, padx=5, pady=5)
+        
         # Matplotlib figure for training progress
         self.fig = Figure(figsize=(6, 4))
         self.ax = self.fig.add_subplot(111)
@@ -123,10 +143,8 @@ class ObjectDetectionGUI:
         self.canvas_split.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     def create_model(self):
-        weights = models.ResNet18_Weights.IMAGENET1K_V1
-        model = models.resnet18(weights=weights)
-        for param in model.parameters():
-            param.requires_grad = False
+        # Load a pre-trained model and modify the final layer
+        model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
         num_features = model.fc.in_features
         model.fc = nn.Linear(num_features, self.num_classes)
         return model
@@ -135,23 +153,26 @@ class ObjectDetectionGUI:
         file_paths = filedialog.askopenfilenames(filetypes=[("Image Files", "*.png;*.jpg;*.jpeg")])
         if not file_paths:
             return
-        
+
+        self.sidebar_text.insert(tk.END, "Uploading images...\n")
+        self.sidebar_text.see(tk.END)
+
         self.img_paths = list(file_paths)
         self.labels = [0] * len(file_paths)  # Dummy labels; replace with actual labels
 
         self.progress["maximum"] = len(self.img_paths)
         self.progress["value"] = 0
-        self.update_progress()
 
-        if self.img_paths:
-            self.display_image(self.img_paths[0])
-            self.update_status("Images uploaded and ready for training.")
-            self.plot_dataset_split()
+        self.process_images_thread = threading.Thread(target=self.process_images)
+        self.process_images_thread.start()
 
     def select_folder(self):
         folder_path = filedialog.askdirectory()
         if not folder_path:
             return
+
+        self.sidebar_text.insert(tk.END, "Selecting folder...\n")
+        self.sidebar_text.see(tk.END)
 
         self.img_paths = []
         self.labels = []
@@ -164,12 +185,20 @@ class ObjectDetectionGUI:
 
         self.progress["maximum"] = len(self.img_paths)
         self.progress["value"] = 0
-        self.update_progress()
 
-        if self.img_paths:
-            self.display_image(self.img_paths[0])
-            self.update_status("Images from folder uploaded and ready for training.")
-            self.plot_dataset_split()
+        self.process_images_thread = threading.Thread(target=self.process_images)
+        self.process_images_thread.start()
+
+    def process_images(self):
+        for i, img_path in enumerate(self.img_paths):
+            self.progress["value"] = i + 1
+            self.update_progress()
+            self.display_image(img_path)
+            self.sidebar_text.insert(tk.END, f"Processed {img_path}\n")
+            self.sidebar_text.see(tk.END)
+        
+        self.update_status("Images processed and ready for training.")
+        self.plot_dataset_split()
 
     def update_progress(self):
         processed = self.progress["value"]
@@ -198,6 +227,10 @@ class ObjectDetectionGUI:
         self.ax_split.set_title('Dataset Split')
         self.canvas_split.draw()
 
+    def log_to_sidebar(self, message):
+        self.sidebar_text.insert(tk.END, f"{message}\n")
+        self.sidebar_text.see(tk.END)
+
     def train_model(self):
         if not self.img_paths:
             messagebox.showwarning("No Images", "Please upload images before training.")
@@ -206,8 +239,20 @@ class ObjectDetectionGUI:
         learning_rate = float(self.lr_entry.get())
         epochs = int(self.epochs_entry.get())
         batch_size = int(self.batch_size_entry.get())
+        finetune_layers = int(self.finetune_layers_entry.get())
 
-        dataset = CustomDataset(self.img_paths, self.labels)
+        # Data augmentation
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.RandomHorizontalFlip(),
+            transforms.RandomRotation(10),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
+            transforms.RandomVerticalFlip(),
+            transforms.RandomResizedCrop(224),
+            transforms.ToTensor()
+        ])
+
+        dataset = CustomDataset(self.img_paths, self.labels, transform=transform)
         num_images = len(dataset)
 
         if num_images < 2:
@@ -222,12 +267,25 @@ class ObjectDetectionGUI:
             train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
             val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
+        # Freeze all layers initially
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+        # Unfreeze the last few layers for fine-tuning
+        for param in list(self.model.parameters())[-finetune_layers:]:
+            param.requires_grad = True
+
         criterion = torch.nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(self.model.fc.parameters(), lr=learning_rate)
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=learning_rate)
+
+        # Learning rate scheduler
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
         
         self.model.train()
         self.losses.clear()
         self.accuracies.clear()
+
+        self.log_to_sidebar("Starting training...")
 
         for epoch in range(epochs):
             running_loss = 0.0
@@ -249,12 +307,14 @@ class ObjectDetectionGUI:
             train_accuracy = correct / total
             self.losses.append(running_loss / len(train_loader))
             self.accuracies.append(train_accuracy)
+
+            scheduler.step()  # Step the learning rate scheduler
             
             if val_loader:
                 val_loss, val_accuracy = self.validate_model(val_loader, criterion)
-                print(f'Epoch {epoch + 1}, Training Loss: {self.losses[-1]}, Training Accuracy: {train_accuracy}, Validation Loss: {val_loss}, Validation Accuracy: {val_accuracy}')
+                self.log_to_sidebar(f'Epoch {epoch + 1}, Training Loss: {self.losses[-1]:.4f}, Training Accuracy: {train_accuracy:.4f}, Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.4f}')
             else:
-                print(f'Epoch {epoch + 1}, Training Loss: {self.losses[-1]}, Training Accuracy: {train_accuracy}')
+                self.log_to_sidebar(f'Epoch {epoch + 1}, Training Loss: {self.losses[-1]:.4f}, Training Accuracy: {train_accuracy:.4f}')
         
         self.update_status("Model training is complete!")
         self.plot_training_progress()
@@ -290,15 +350,70 @@ class ObjectDetectionGUI:
     def save_model(self):
         torch.save(self.model.state_dict(), self.model_path)
         self.update_status("Model saved successfully!")
-    
+        self.log_to_sidebar("Model saved successfully!")
+
     def load_model(self):
         if os.path.exists(self.model_path):
             self.model.load_state_dict(torch.load(self.model_path))
             self.model.to(self.device)
             self.update_status("Model loaded successfully!")
+            self.log_to_sidebar("Model loaded successfully!")
         else:
             messagebox.showerror("Error", "Model file not found!")
-    
+
+    def start_detection(self):
+        if not self.model:
+            messagebox.showwarning("No Model", "Please load a model before starting detection.")
+            return
+
+        self.running_detection = True
+        self.detection_thread = threading.Thread(target=self.detect_realtime)
+        self.detection_thread.start()
+
+    def stop_detection(self):
+        self.running_detection = False
+
+    def detect_realtime(self):
+        cap = cv2.VideoCapture("http://192.168.1.5:8080/video")  # IP camera stream URL
+        if not cap.isOpened():
+            self.log_to_sidebar("Error: Could not open video stream.")
+            self.update_status("Error: Could not open video stream.")
+            return
+
+        self.log_to_sidebar("Starting real-time detection...")
+        self.update_status("Starting real-time detection...")
+
+        transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
+        self.model.eval()
+
+        while self.running_detection and cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            input_tensor = transform(image).unsqueeze(0).to(self.device)
+            
+            with torch.no_grad():
+                outputs = self.model(input_tensor)
+                _, predicted = torch.max(outputs.data, 1)
+                label = predicted.item()
+                
+                # Log the prediction
+                self.log_to_sidebar(f"Predicted: {label}, Outputs: {outputs}")
+
+            label_text = f"Detected: {label}"
+            cv2.putText(frame, label_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.imshow('Real-time Detection', frame)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+        self.log_to_sidebar("Real-time detection stopped.")
+        self.update_status("Real-time detection stopped.")
+
     def update_status(self, message):
         self.status_label.config(text=f"Status: {message}")
 
