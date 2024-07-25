@@ -1,6 +1,6 @@
-# drods
-Realtime object detect system
 
+### Project Structure
+```
 MobileCameraApp/
 ├── trained_images/               # Directory for storing trained images
 ├── dataset/                      # Directory for storing dataset images
@@ -12,10 +12,11 @@ MobileCameraApp/
 ├── requirements.txt              # List of dependencies
 ├── README.md                     # Project README file
 └── LICENSE                       # License file (optional)
+```
 
-List all your dependencies in the requirements.txt file. Example:
-
-Copy code
+### `requirements.txt`
+List all your dependencies in the `requirements.txt` file. Example:
+```
 opencv-python-headless
 face-recognition
 torch
@@ -23,6 +24,12 @@ Pillow
 joblib
 pytesseract
 matplotlib
+```
+
+### `README.md`
+Create a `README.md` file to describe your project. Here's a template:
+
+```markdown
 # Mobile Camera App
 
 This is a real-time object and face detection application using YOLOv5 and KNN classifier with a graphical user interface built with Tkinter.
@@ -86,41 +93,56 @@ This is a real-time object and face detection application using YOLOv5 and KNN c
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-Posting on GitHub
-Create a Repository:
+```
 
-Go to GitHub and create a new repository.
-Name it MobileCameraApp (or any other name you prefer).
-Initialize Git:
+### Posting on GitHub
 
-In your project directory, initialize Git:
-sh
-Copy code
-git init
-Add Remote Repository:
+1. **Create a Repository:**
+   - Go to GitHub and create a new repository.
+   - Name it `MobileCameraApp` (or any other name you prefer).
 
-Add the remote repository you created on GitHub:
-sh
-Copy code
-git remote add origin https://github.com/yourusername/MobileCameraApp.git
-Add and Commit Files:
+2. **Initialize Git:**
+   - In your project directory, initialize Git:
+     ```sh
+     git init
+     ```
 
-Add all files to the repository and commit:
-sh
-Copy code
-git add .
-git commit -m "Initial commit"
-Push to GitHub:
+3. **Add Remote Repository:**
+   - Add the remote repository you created on GitHub:
+     ```sh
+     git remote add origin https://github.com/yourusername/MobileCameraApp.git
+     ```
 
-Push your local repository to GitHub:
-sh
-Copy code
-git push -u origin master
-Add .gitignore:
+4. **Add and Commit Files:**
+   - Add all files to the repository and commit:
+     ```sh
+     git add .
+     git commit -m "Initial commit"
+     ```
 
-Add a .gitignore file to exclude unnecessary files from the repository. Example:
-markdown
-Copy code
+5. **Push to GitHub:**
+   - Push your local repository to GitHub:
+     ```sh
+     git push -u origin master
+     ```
+
+6. **Add `.gitignore`:**
+   - Add a `.gitignore` file to exclude unnecessary files from the repository. Example:
+     ```
+     __pycache__/
+     *.pyc
+     *.pyo
+     *.pyd
+     .Python
+     venv/
+     recognition_data.db
+     classifier.joblib
+     trained_images/
+     dataset/
+     ```
+
+### Example `.gitignore`
+```plaintext
 __pycache__/
 *.pyc
 *.pyo
@@ -131,17 +153,6 @@ recognition_data.db
 classifier.joblib
 trained_images/
 dataset/
-Example .gitignore
-plaintext
-Copy code
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-venv/
-recognition_data.db
-classifier.joblib
-trained_images/
-dataset/
-This .gitignore ensures that Python cache files, virtual environments, the SQLite database, the trained classifier, and images are not included in the repository.
+```
+
+This `.gitignore` ensures that Python cache files, virtual environments, the SQLite database, the trained classifier, and images are not included in the repository.
