@@ -1,0 +1,404 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from tkinter import ttk
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+import torch
+import torchvision.transforms as transforms
+import torchvision.models as models
+from torch.utils.data import DataLoader, Dataset, random_split
+from torch import nn, optim
+from PIL import Image, ImageTk
+import os
+import threading
+import cv2
+
+# Define a simple dataset class
+class CustomDataset(Dataset):
+    def __init__(self, img_paths, labels, transform=None):
+        self.img_paths = img_paths
+        self.labels = labels
+        self.transform = transform if transform else transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
+    
+    def __len__(self):
+        return len(self.img_paths)
+    
+    def __getitem__(self, idx):
+        img = Image.open(self.img_paths[idx]).convert("RGB")
+        img = self.transform(img)
+        label = torch.tensor(self.labels[idx], dtype=torch.long)
+        return img, label
+
+class ObjectDetectionGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Image Classification Training Tool")
+        self.root.geometry("1200x800")
+        self.root.resizable(True, True)
+        
+        self.create_widgets()
+        
+        self.img_paths = []
+        self.labels = []
+        self.num_classes = 10  # Adjust this based on your dataset
+        self.model = self.create_model()
+        self.model_path = "image_classification_model.pth"
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
+
+        self.losses = []
+        self.accuracies = []
+        self.running_detection = False
+
+    def create_widgets(self):
+        # Frame for image and plot display
+        self.image_frame = ttk.Frame(self.root, padding="10")
+        self.image_frame.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        
+        self.image_label = tk.Label(self.image_frame, text="No image selected", relief=tk.RAISED)
+        self.image_label.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+        # Frame for buttons
+        self.buttons_frame = ttk.Frame(self.root, padding="10")
+        self.buttons_frame.pack(fill=tk.X, side=tk.TOP)
+
+        self.upload_button = ttk.Button(self.buttons_frame, text="Upload Annotated Images", command=self.upload_images)
+        self.upload_button.pack(side=tk.LEFT, padx=5)
+        
+        self.folder_button = ttk.Button(self.buttons_frame, text="Select Folder", command=self.select_folder)
+        self.folder_button.pack(side=tk.LEFT, padx=5)
+        
+        self.train_button = ttk.Button(self.buttons_frame, text="Train Model", command=self.train_model)
+        self.train_button.pack(side=tk.LEFT, padx=5)
+        
+        self.save_model_button = ttk.Button(self.buttons_frame, text="Save Model", command=self.save_model)
+        self.save_model_button.pack(side=tk.LEFT, padx=5)
+        
+        self.load_model_button = ttk.Button(self.buttons_frame, text="Load Model", command=self.load_model)
+        self.load_model_button.pack(side=tk.LEFT, padx=5)
+
+        self.start_detection_button = ttk.Button(self.buttons_frame, text="Start Detection", command=self.start_detection)
+        self.start_detection_button.pack(side=tk.LEFT, padx=5)
+
+        self.stop_detection_button = ttk.Button(self.buttons_frame, text="Stop Detection", command=self.stop_detection)
+        self.stop_detection_button.pack(side=tk.LEFT, padx=5)
+
+        # Advanced options frame
+        self.advanced_frame = ttk.Frame(self.root, padding="10")
+        self.advanced_frame.pack(fill=tk.X, side=tk.BOTTOM)
+
+        ttk.Label(self.advanced_frame, text="Learning Rate:").pack(side=tk.LEFT, padx=5)
+        self.lr_entry = ttk.Entry(self.advanced_frame)
+        self.lr_entry.insert(0, "0.001")
+        self.lr_entry.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(self.advanced_frame, text="Epochs:").pack(side=tk.LEFT, padx=5)
+        self.epochs_entry = ttk.Entry(self.advanced_frame)
+        self.epochs_entry.insert(0, "5")
+        self.epochs_entry.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(self.advanced_frame, text="Batch Size:").pack(side=tk.LEFT, padx=5)
+        self.batch_size_entry = ttk.Entry(self.advanced_frame)
+        self.batch_size_entry.insert(0, "4")
+        self.batch_size_entry.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(self.advanced_frame, text="Fine-tune Layers:").pack(side=tk.LEFT, padx=5)
+        self.finetune_layers_entry = ttk.Entry(self.advanced_frame)
+        self.finetune_layers_entry.insert(0, "0")  # Number of layers to unfreeze for fine-tuning
+        self.finetune_layers_entry.pack(side=tk.LEFT, padx=5)
+
+        # Status frame
+        self.status_frame = ttk.Frame(self.root, padding="10")
+        self.status_frame.pack(fill=tk.X, side=tk.BOTTOM)
+        
+        self.status_label = tk.Label(self.status_frame, text="Status: Idle", foreground="green")
+        self.status_label.pack()
+
+        # Progress bar for image processing
+        self.progress = ttk.Progressbar(self.status_frame, orient="horizontal", length=500, mode="determinate")
+        self.progress.pack(padx=5, pady=5)
+
+        self.progress_label = tk.Label(self.status_frame, text="0/0 images processed")
+        self.progress_label.pack()
+
+        # Sidebar for background process status
+        self.sidebar_frame = ttk.Frame(self.root, padding="10")
+        self.sidebar_frame.pack(fill=tk.Y, side=tk.RIGHT)
+        
+        self.sidebar_text = tk.Text(self.sidebar_frame, width=40, height=30)
+        self.sidebar_text.pack(fill=tk.Y, padx=5, pady=5)
+        
+        # Matplotlib figure for training progress
+        self.fig = Figure(figsize=(6, 4))
+        self.ax = self.fig.add_subplot(111)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.root)
+        self.canvas.draw()
+        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # Matplotlib figure for dataset split
+        self.fig_split = Figure(figsize=(4, 4))
+        self.ax_split = self.fig_split.add_subplot(111)
+        self.canvas_split = FigureCanvasTkAgg(self.fig_split, master=self.root)
+        self.canvas_split.draw()
+        self.canvas_split.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    def create_model(self):
+        # Load a pre-trained model and modify the final layer
+        model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+        num_features = model.fc.in_features
+        model.fc = nn.Linear(num_features, self.num_classes)
+        return model
+
+    def upload_images(self):
+        file_paths = filedialog.askopenfilenames(filetypes=[("Image Files", "*.png;*.jpg;*.jpeg")])
+        if not file_paths:
+            return
+
+        self.sidebar_text.insert(tk.END, "Uploading images...\n")
+        self.sidebar_text.see(tk.END)
+
+        self.img_paths = list(file_paths)
+        self.labels = [0] * len(file_paths)  # Dummy labels; replace with actual labels
+
+        self.progress["maximum"] = len(self.img_paths)
+        self.progress["value"] = 0
+
+        self.process_images_thread = threading.Thread(target=self.process_images)
+        self.process_images_thread.start()
+
+    def select_folder(self):
+        folder_path = filedialog.askdirectory()
+        if not folder_path:
+            return
+
+        self.sidebar_text.insert(tk.END, "Selecting folder...\n")
+        self.sidebar_text.see(tk.END)
+
+        self.img_paths = []
+        self.labels = []
+
+        for root, _, files in os.walk(folder_path):
+            for file in files:
+                if file.endswith(('.png', '.jpg', '.jpeg')):
+                    self.img_paths.append(os.path.join(root, file))
+                    self.labels.append(0)  # Dummy labels; replace with actual labels
+
+        self.progress["maximum"] = len(self.img_paths)
+        self.progress["value"] = 0
+
+        self.process_images_thread = threading.Thread(target=self.process_images)
+        self.process_images_thread.start()
+
+    def process_images(self):
+        for i, img_path in enumerate(self.img_paths):
+            self.progress["value"] = i + 1
+            self.update_progress()
+            self.display_image(img_path)
+            self.sidebar_text.insert(tk.END, f"Processed {img_path}\n")
+            self.sidebar_text.see(tk.END)
+        
+        self.update_status("Images processed and ready for training.")
+        self.plot_dataset_split()
+
+    def update_progress(self):
+        processed = self.progress["value"]
+        total = self.progress["maximum"]
+        self.progress_label.config(text=f"{processed}/{total} images processed")
+        self.progress.update_idletasks()
+
+    def display_image(self, img_path):
+        img = Image.open(img_path)
+        img = img.resize((300, 300), Image.LANCZOS)
+        img = ImageTk.PhotoImage(img)
+        self.image_label.config(image=img, text="")
+        self.image_label.image = img  # Keep a reference to avoid garbage collection
+
+    def plot_dataset_split(self):
+        num_images = len(self.img_paths)
+        train_size = int(0.8 * num_images)
+        val_size = num_images - train_size
+        sizes = [train_size, val_size]
+        labels = ['Training', 'Validation']
+        colors = ['tab:blue', 'tab:orange']
+
+        self.ax_split.clear()
+        self.ax_split.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+        self.ax_split.axis('equal')
+        self.ax_split.set_title('Dataset Split')
+        self.canvas_split.draw()
+
+    def log_to_sidebar(self, message):
+        self.sidebar_text.insert(tk.END, f"{message}\n")
+        self.sidebar_text.see(tk.END)
+
+    def train_model(self):
+        if not self.img_paths:
+            messagebox.showwarning("No Images", "Please upload images before training.")
+            return
+
+        learning_rate = float(self.lr_entry.get())
+        epochs = int(self.epochs_entry.get())
+        batch_size = int(self.batch_size_entry.get())
+        finetune_layers = int(self.finetune_layers_entry.get())
+
+        dataset = CustomDataset(self.img_paths, self.labels)
+        num_images = len(dataset)
+
+        if num_images < 2:
+            messagebox.showwarning("Insufficient Data", "Not enough images to split into training and validation sets.")
+            train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+            val_loader = None
+        else:
+            train_size = int(0.8 * num_images)
+            val_size = num_images - train_size
+
+            train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+            val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+        # Freeze all layers initially
+        for param in self.model.parameters():
+            param.requires_grad = False
+
+        # Unfreeze the last few layers for fine-tuning
+        for param in list(self.model.parameters())[-finetune_layers:]:
+            param.requires_grad = True
+
+        criterion = torch.nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, self.model.parameters()), lr=learning_rate)
+        
+        self.model.train()
+        self.losses.clear()
+        self.accuracies.clear()
+
+        self.log_to_sidebar("Starting training...")
+
+        for epoch in range(epochs):
+            running_loss = 0.0
+            correct = 0
+            total = 0
+            for inputs, labels in train_loader:
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                optimizer.zero_grad()
+                outputs = self.model(inputs)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+                
+                running_loss += loss.item()
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+            
+            train_accuracy = correct / total
+            self.losses.append(running_loss / len(train_loader))
+            self.accuracies.append(train_accuracy)
+            
+            if val_loader:
+                val_loss, val_accuracy = self.validate_model(val_loader, criterion)
+                self.log_to_sidebar(f'Epoch {epoch + 1}, Training Loss: {self.losses[-1]:.4f}, Training Accuracy: {train_accuracy:.4f}, Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_accuracy:.4f}')
+            else:
+                self.log_to_sidebar(f'Epoch {epoch + 1}, Training Loss: {self.losses[-1]:.4f}, Training Accuracy: {train_accuracy:.4f}')
+        
+        self.update_status("Model training is complete!")
+        self.plot_training_progress()
+
+    def validate_model(self, val_loader, criterion):
+        self.model.eval()
+        val_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for inputs, labels in val_loader:
+                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                outputs = self.model(inputs)
+                loss = criterion(outputs, labels)
+                val_loss += loss.item()
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+        
+        val_accuracy = correct / total
+        return val_loss / len(val_loader), val_accuracy
+
+    def plot_training_progress(self):
+        self.ax.clear()
+        self.ax.plot(self.losses, label='Training Loss', color='tab:red')
+        self.ax.plot(self.accuracies, label='Training Accuracy', color='tab:blue')
+        self.ax.set_xlabel('Epoch')
+        self.ax.set_ylabel('Value')
+        self.ax.set_title('Training Progress')
+        self.ax.legend()
+        self.canvas.draw()
+
+    def save_model(self):
+        torch.save(self.model.state_dict(), self.model_path)
+        self.update_status("Model saved successfully!")
+        self.log_to_sidebar("Model saved successfully!")
+
+    def load_model(self):
+        if os.path.exists(self.model_path):
+            self.model.load_state_dict(torch.load(self.model_path))
+            self.model.to(self.device)
+            self.update_status("Model loaded successfully!")
+            self.log_to_sidebar("Model loaded successfully!")
+        else:
+            messagebox.showerror("Error", "Model file not found!")
+
+    def start_detection(self):
+        if not self.model:
+            messagebox.showwarning("No Model", "Please load a model before starting detection.")
+            return
+
+        self.running_detection = True
+        self.detection_thread = threading.Thread(target=self.detect_realtime)
+        self.detection_thread.start()
+
+    def stop_detection(self):
+        self.running_detection = False
+
+    def detect_realtime(self):
+        cap = cv2.VideoCapture(0)  # Change this to the correct camera index or video file path
+        if not cap.isOpened():
+            self.log_to_sidebar("Error: Could not open video stream.")
+            self.update_status("Error: Could not open video stream.")
+            return
+
+        self.log_to_sidebar("Starting real-time detection...")
+        self.update_status("Starting real-time detection...")
+
+        transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
+        self.model.eval()
+
+        while self.running_detection and cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            input_tensor = transform(image).unsqueeze(0).to(self.device)
+            
+            with torch.no_grad():
+                outputs = self.model(input_tensor)
+                _, predicted = torch.max(outputs.data, 1)
+                label = predicted.item()
+
+            label_text = f"Detected: {label}"
+            cv2.putText(frame, label_text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            cv2.imshow('Real-time Detection', frame)
+
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+        cap.release()
+        cv2.destroyAllWindows()
+        self.log_to_sidebar("Real-time detection stopped.")
+        self.update_status("Real-time detection stopped.")
+
+    def update_status(self, message):
+        self.status_label.config(text=f"Status: {message}")
+
+# Create the main window
+root = tk.Tk()
+app = ObjectDetectionGUI(root)
+root.mainloop()
