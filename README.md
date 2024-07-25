@@ -1,7 +1,6 @@
 # drods
 Realtime object detect system
 
-Project Structure
 MobileCameraApp/
 ├── trained_images/               # Directory for storing trained images
 ├── dataset/                      # Directory for storing dataset images
@@ -14,7 +13,6 @@ MobileCameraApp/
 ├── README.md                     # Project README file
 └── LICENSE                       # License file (optional)
 
-requirements.txt
 List all your dependencies in the requirements.txt file. Example:
 
 Copy code
@@ -25,11 +23,6 @@ Pillow
 joblib
 pytesseract
 matplotlib
-README.md
-Create a README.md file to describe your project. Here's a template:
-
-markdown
-Copy code
 # Mobile Camera App
 
 This is a real-time object and face detection application using YOLOv5 and KNN classifier with a graphical user interface built with Tkinter.
