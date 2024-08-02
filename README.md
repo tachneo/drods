@@ -154,5 +154,6 @@ classifier.joblib
 trained_images/
 dataset/
 ```
+![image](https://github.com/user-attachments/assets/ce56a747-e9b0-46c2-970a-7e5a3113f9f3)
 
 This `.gitignore` ensures that Python cache files, virtual environments, the SQLite database, the trained classifier, and images are not included in the repository.
