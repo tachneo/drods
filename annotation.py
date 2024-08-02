@@ -20,7 +20,7 @@ class LabelingTool:
         self.root.title("Advanced YOLO Object Detection Labeling Tool")
         self.root.geometry("1200x800")
 
-        self.model = torch.hub.load('ultralytics/yolov5', 'yolov5s')  # Load YOLOv5 model
+        self.model = torch.hub.load('ultralytics/yolov5', 'yolov5s', pretrained=True)  # Load YOLOv5 model
 
         self.create_menu()
         self.create_widgets()
@@ -31,6 +31,12 @@ class LabelingTool:
         self.start_x, self.start_y = None, None
         self.scale_factor = 1.0
         self.axis_lines = []
+
+        self.data_dir = Path('./data')
+        self.train_dir = self.data_dir / 'train'
+        self.val_dir = self.data_dir / 'val'
+        self.train_dir.mkdir(parents=True, exist_ok=True)
+        self.val_dir.mkdir(parents=True, exist_ok=True)
 
     def create_menu(self):
         menubar = tk.Menu(self.root)
@@ -138,7 +144,7 @@ class LabelingTool:
             self.img_resized = self.img.resize((int(self.img.width * self.scale_factor), int(self.img.height * self.scale_factor)), Image.LANCZOS)
             self.img_tk = ImageTk.PhotoImage(self.img_resized)
             self.canvas.create_image(0, 0, anchor=tk.NW, image=self.img_tk)
-            self.file_path = file_path
+            self.file_path = Path(file_path)
             self.load_annotations()
         except Exception as e:
             self.log(f"Error displaying image: {e}")
@@ -209,21 +215,22 @@ class LabelingTool:
 
     def save_annotations_to_file(self):
         try:
-            with open(self.file_path.replace(".jpg", ".txt").replace(".jpeg", ".txt").replace(".png", ".txt"), "w") as f:
+            annotation_path = self.file_path.with_suffix('.txt')
+            with open(annotation_path, 'w') as f:
                 for label, bbox in self.annotations:
                     x_center = (bbox[0] + bbox[2]) / 2 / self.img.width
                     y_center = (bbox[1] + bbox[3]) / 2 / self.img.height
                     width = abs(bbox[0] - bbox[2]) / self.img.width
                     height = abs(bbox[1] - bbox[3]) / self.img.height
-                    f.write(f"{label} {x_center} {y_center} {width} {height}\n")
+                    f.write(f"{self.class_list.index(label)} {x_center} {y_center} {width} {height}\n")
         except Exception as e:
             self.log(f"Error saving annotations to file: {e}")
             messagebox.showerror("Error", f"Error saving annotations to file: {e}")
 
     def load_annotations(self):
         self.annotations = []
-        annotation_file = self.file_path.replace(".jpg", ".txt").replace(".jpeg", ".txt").replace(".png", ".txt")
-        if os.path.exists(annotation_file):
+        annotation_file = self.file_path.with_suffix('.txt')
+        if annotation_file.exists():
             with open(annotation_file, "r") as f:
                 for line in f.readlines():
                     label, x_center, y_center, width, height = line.strip().split()
@@ -286,7 +293,7 @@ class LabelingTool:
                 ymax.text = str(int(bbox[3]))
 
             tree = etree.ElementTree(annotation)
-            tree.write(self.file_path.replace(".jpg", ".xml").replace(".jpeg", ".xml").replace(".png", ".xml"), pretty_print=True)
+            tree.write(self.file_path.with_suffix('.xml'), pretty_print=True)
             self.status.set("Annotations exported as Pascal VOC.")
             self.log("Annotations exported as Pascal VOC.")
         except Exception as e:
@@ -301,7 +308,7 @@ class LabelingTool:
                     "label": label,
                     "bbox": bbox
                 })
-            with open(self.file_path.replace(".jpg", ".json").replace(".jpeg", ".json").replace(".png", ".json"), "w") as f:
+            with open(self.file_path.with_suffix('.json'), "w") as f:
                 json.dump(annotations, f, indent=4)
             self.status.set("Annotations exported as COCO.")
             self.log("Annotations exported as COCO.")
@@ -319,13 +326,13 @@ class LabelingTool:
 
             # Create YAML configuration for YOLO training
             data_config = {
-                'train': str(Path('./data/train')),
-                'val': str(Path('./data/val')),
+                'train': str(self.train_dir),
+                'val': str(self.val_dir),
                 'nc': len(self.class_list),
                 'names': self.class_list
             }
 
-            with open('data.yaml', 'w') as f:
+            with open(self.data_dir / 'data.yaml', 'w') as f:
                 yaml.dump(data_config, f)
 
             self.status.set("Training started.")
@@ -345,50 +352,62 @@ class LabelingTool:
             xmlfiles = [replace_text(x) for x in xmlfiles]
 
             def extract_text(filename):
-                tree = etree.parse(filename)
-                root = tree.getroot()
+                try:
+                    tree = etree.parse(filename)
+                    root = tree.getroot()
 
-                # Extract filename
-                image_name_elem = root.find('filename')
-                if image_name_elem is None:
-                    self.log(f"No 'filename' element found in {filename}")
-                    raise ValueError(f"No 'filename' element found in {filename}")
-                image_name = image_name_elem.text
+                    # Extract filename
+                    image_name_elem = root.find('filename')
+                    if image_name_elem is None:
+                        self.log(f"No 'filename' element found in {filename}")
+                        return []
 
-                # Width and height of the image
-                size_elem = root.find('size')
-                if size_elem is None:
-                    self.log(f"No 'size' element found in {filename}")
-                    raise ValueError(f"No 'size' element found in {filename}")
-                width = int(size_elem.find('width').text)
-                height = int(size_elem.find('height').text)
+                    image_name = image_name_elem.text
 
-                objs = root.findall('object')
-                parser = []
+                    # Width and height of the image
+                    size_elem = root.find('size')
+                    if size_elem is None:
+                        self.log(f"No 'size' element found in {filename}")
+                        return []
 
-                for obj in objs:
-                    name_elem = obj.find('name')
-                    if name_elem is None:
-                        self.log(f"No 'name' element found in object in {filename}")
-                        continue
-                    name = name_elem.text
-                    bndbox = obj.find('bndbox')
-                    xmin = int(bndbox.find('xmin').text)
-                    xmax = int(bndbox.find('xmax').text)
-                    ymin = int(bndbox.find('ymin').text)
-                    ymax = int(bndbox.find('ymax').text)
+                    width = int(size_elem.find('width').text)
+                    height = int(size_elem.find('height').text)
 
-                    center_x = (xmin + xmax) / 2 / width
-                    center_y = (ymin + ymax) / 2 / height
-                    w = (xmax - xmin) / width
-                    h = (ymax - ymin) / height
+                    objs = root.findall('object')
+                    parser = []
 
-                    parser.append([image_name, width, height, name, xmin, xmax, ymin, ymax, center_x, center_y, w, h])
+                    for obj in objs:
+                        name_elem = obj.find('name')
+                        if name_elem is None:
+                            self.log(f"No 'name' element found in object in {filename}")
+                            continue
+                        name = name_elem.text
+                        bndbox = obj.find('bndbox')
+                        xmin = int(bndbox.find('xmin').text)
+                        xmax = int(bndbox.find('xmax').text)
+                        ymin = int(bndbox.find('ymin').text)
+                        ymax = int(bndbox.find('ymax').text)
 
-                return parser
+                        center_x = (xmin + xmax) / 2 / width
+                        center_y = (ymin + ymax) / 2 / height
+                        w = (xmax - xmin) / width
+                        h = (ymax - ymin) / height
+
+                        parser.append([image_name, width, height, name, xmin, xmax, ymin, ymax, center_x, center_y, w, h])
+
+                    return parser
+                except Exception as e:
+                    self.log(f"Error parsing {filename}: {e}")
+                    return []
 
             # Apply the extract_text function to each XML file
             parser_all = list(map(extract_text, xmlfiles))
+
+            # Filter out empty lists from parser_all
+            parser_all = [p for p in parser_all if p]
+
+            if not parser_all:
+                raise ValueError("No valid XML files processed.")
 
             # Flatten the list of lists using reduce
             data = reduce(lambda x, y: x + y, parser_all)
@@ -473,7 +492,7 @@ class LabelingTool:
     def run_training(self, epochs, batch_size):
         try:
             # Training command
-            os.system(f"python train.py --img 640 --batch {batch_size} --epochs {epochs} --data data.yaml --weights yolov5s.pt")
+            os.system(f"python yolov5/train.py --img 640 --batch {batch_size} --epochs {epochs} --data {self.data_dir/'data.yaml'} --weights yolov5s.pt")
             self.status.set("Training completed.")
             self.log("Training completed.")
         except Exception as e:
@@ -483,7 +502,7 @@ class LabelingTool:
     def export_onnx(self):
         try:
             # Convert model to ONNX
-            os.system("python export.py --weights runs/train/exp/weights/best.pt --include onnx --simplify --opset 12")
+            os.system("python yolov5/export.py --weights runs/train/exp/weights/best.pt --include onnx --simplify --opset 12")
             self.status.set("Model exported to ONNX.")
             self.log("Model exported to ONNX.")
         except Exception as e:
